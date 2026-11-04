@@ -12,18 +12,21 @@ Es un autoclicker **limitado**, hecho para cumplir las reglas del servidor. No t
 - **Solo clic izquierdo**, y solo mientras mantienes pulsado el botón del ratón.
 - **Máximo 16 CPS**, siempre. El slider va de 1.0 a 16.0 CPS y además hay un límite duro: nunca más de 16 clics (contando tu clic real) en cualquier segundo.
 - **Aleatoriedad fija** de ±0.5 CPS por clic.
-- **Solo funciona con Minecraft enfocado** (ventana con "Minecraft" en el título o proceso `javaw.exe`/`java.exe`).
+- **Solo funciona con Minecraft enfocado** (ventana del juego o proceso `javaw.exe`/`java.exe`).
 - **No clica en menús**: inventario, cofres, aldeanos, chat… se bloquea automáticamente.
-- Se activa/desactiva con una **tecla que tú eliges**.
+- **Click on inventory no está permitido**: en AstralMC el autoclick en inventarios (refill de pociones) es baneable. Solo PvP.
+- **Whitelisted hotbar slots**: eliges en qué slots de la hotbar (1–9) funciona. El slot se sigue con las teclas 1–9 y la rueda del ratón.
+- **Enabled** + **Bind**: se activa con la casilla o con una **tecla que tú eliges**.
 
 Lo que **no** tiene: reach, aim, macros, inyección en el juego, conexión a internet, escritura de archivos ni cambios en el registro. Es un único archivo de código fuente (`AstralMC_Clicker.cpp`) que puedes revisar.
 
 ## Uso
 
 1. Abre `AstralClicker.exe`.
-2. Pulsa el botón de tecla y elige la tecla de activación (Esc = ninguna).
-3. Ajusta los **clicks por segundo**.
-4. Con Minecraft enfocado, pulsa la tecla para activarlo y mantén el clic izquierdo.
+2. Pulsa **Bind** y elige la tecla de activación (Esc = ninguna).
+3. Ajusta los **clicks per second** y marca los **slots de la hotbar** donde quieres que funcione.
+4. Con Minecraft enfocado, pulsa la tecla (o marca **Enabled**) y mantén el clic izquierdo.
+5. Al abrirlo empieza en el slot 1: si no coincide con el juego, pulsa un número para sincronizarlo.
 
 > Windows SmartScreen puede avisar porque el .exe no está firmado. Pulsa "Más información" → "Ejecutar de todas formas".
 

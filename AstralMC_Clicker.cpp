@@ -1,8 +1,8 @@
 // AutoClicker para Minecraft Java - Win32 nativo, un solo archivo.
-// Compilar con MSYS2 UCRT64:
-// g++ -std=c++17 -O2 -s -municode -mwindows -static -static-libgcc -static-libstdc++ "AstralMC_Clicker_1.cpp" -o AstralClicker.exe -lcomctl32 -lwinmm -luxtheme -lgdiplus -luser32 -lgdi32
+// Compilar con MSYS2 UCRT64 / MinGW-w64:
+// g++ -std=c++17 -O2 -s -municode -mwindows -static -static-libgcc -static-libstdc++ AstralMC_Clicker.cpp -o AstralClicker.exe -lcomctl32 -lwinmm -luxtheme -lgdiplus -luser32 -lgdi32
 // Compilar con Developer Command Prompt for Visual Studio:
-// cl /EHsc /O2 /MT /std:c++17 /utf-8 AstralMC_Clicker_1.cpp comctl32.lib winmm.lib user32.lib gdi32.lib
+// cl /EHsc /O2 /MT /std:c++17 /utf-8 AstralMC_Clicker.cpp comctl32.lib winmm.lib user32.lib gdi32.lib gdiplus.lib
 
 #ifndef UNICODE
 #define UNICODE
@@ -48,7 +48,7 @@ namespace Gp = Gdiplus;
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 
-enum { ID_BIND = 1, ID_CPS, ID_CPSVAL, ID_STATUS, ID_NOTE };
+enum { ID_CPS = 1 };
 
 struct SliderData { int minimum; int maximum; int value; bool dragging; };
 SliderData g_cpsData{10, 160, 155, false};   // 1.0 - 16.0 CPS (defecto 15.5)
@@ -66,19 +66,45 @@ std::atomic<bool> g_pressInMenu{ false };  // ese clic empezo dentro de un menu
 std::atomic<int>  g_cpsX10{ 155 };
 std::atomic<int>  g_key{ 0 };
 
-HWND g_hwnd = nullptr, g_btnBind = nullptr, g_lblStatus = nullptr;
-HWND g_lblCps = nullptr, g_sldCps = nullptr;
+// Hotbar: slot seleccionado (0-8) y mascara de slots permitidos (bit i = slot i+1).
+std::atomic<int>  g_slot{ 0 };
+std::atomic<int>  g_slotMask{ 0x1FF };     // por defecto los 9 slots activos
+std::atomic<int>  g_wheelAccum{ 0 };       // delta de rueda pendiente (eventos fisicos)
+
+HWND g_hwnd = nullptr, g_sldCps = nullptr;
 HHOOK g_mouseHook = nullptr;
-HBRUSH g_darkBrush = nullptr;
+HFONT g_fTitle = nullptr, g_fSub = nullptr, g_fGroup = nullptr, g_fLabel = nullptr, g_fSmall = nullptr;
+
 constexpr COLORREF COL_BG = RGB(20, 21, 27);
 constexpr COLORREF COL_PANEL = RGB(29, 30, 39);
+constexpr COLORREF COL_BORDER = RGB(52, 50, 64);
 constexpr COLORREF COL_PURPLE = RGB(145, 91, 220);
 constexpr COLORREF COL_PURPLE_LIGHT = RGB(190, 150, 255);
 constexpr COLORREF COL_TEXT = RGB(235, 233, 242);
 constexpr COLORREF COL_MUTED = RGB(157, 157, 177);
 constexpr COLORREF COL_PURPLE_DARK = RGB(83, 48, 125);
 constexpr COLORREF COL_TRACK = RGB(44, 42, 53);
-constexpr COLORREF COL_ORANGE = RGB(224, 157, 77);
+constexpr COLORREF COL_GREEN = RGB(110, 214, 140);
+constexpr COLORREF COL_RED = RGB(224, 101, 122);
+
+// ---- Layout (coordenadas de cliente) ----
+constexpr int kClientW = 480, kClientH = 392;
+constexpr int kPanelL = 16, kPanelT = 74, kPanelR = kClientW - 16, kPanelB = 352;
+constexpr int kIX = 32, kIR = kClientW - 32;            // margen interior
+const RECT kRcEnabled   { kIX, 112, kIX + 160, 130 };
+const RECT kRcCpsLabel  { kIX, 140, kIR, 158 };
+constexpr int kSliderY = 158, kSliderH = 32;
+const RECT kRcInventory { kIX, 200, kIX + 200, 218 };
+const RECT kRcSlotsLbl  { kIX, 230, kIR, 248 };
+constexpr int kSlotY = 254, kSlotSize = 26;
+const RECT kRcBind      { kIX, 298, kIR, 334 };
+const RECT kRcStatus    { kPanelL + 4, 360, kPanelR, 384 };
+
+RECT SlotRect(int i) {
+    const int step = (kIR - kIX - kSlotSize) / 8;
+    const int x = kIX + i * step;
+    return RECT{ x, kSlotY, x + kSlotSize, kSlotY + kSlotSize };
+}
 
 // ---- Helpers de dibujo suave (GDI+) ----
 inline Gp::Color GdipColor(COLORREF c, BYTE a = 255) {
@@ -110,6 +136,9 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
                 g_lmbHeld.store(false);
                 g_pressEval.store(false);
                 g_pressInMenu.store(false);
+            } else if (w == WM_MOUSEWHEEL) {
+                // Solo se guarda el giro de la rueda para seguir el slot de la hotbar.
+                g_wheelAccum.fetch_add(static_cast<short>(HIWORD(ms->mouseData)));
             }
         }
     }
@@ -121,9 +150,11 @@ bool MinecraftFocused() {
     HWND fg = GetForegroundWindow();
     if (!fg) return false;
 
-    wchar_t title[512]{};
-    GetWindowTextW(fg, title, static_cast<int>(std::size(title)));
-    if (wcsstr(title, L"Minecraft") != nullptr) return true;
+    // Ventana de juego de Minecraft: LWJGL 2 (1.8.9) o GLFW (versiones nuevas).
+    // No se usa el titulo: un navegador o un chat con "Minecraft" en el titulo no cuenta.
+    wchar_t cls[64]{};
+    GetClassNameW(fg, cls, static_cast<int>(std::size(cls)));
+    if (wcscmp(cls, L"LWJGL") == 0 || wcsncmp(cls, L"GLFW", 4) == 0) return true;
 
     DWORD pid = 0;
     GetWindowThreadProcessId(fg, &pid);
@@ -184,21 +215,13 @@ private:
 
 // Aproxima si una GUI esta abierta comprobando el modo de raton de Minecraft.
 // Con el raton capturado, Minecraft recoloca el cursor en el centro de la ventana
-// en cada frame. Al mover la camara rapido el cursor se aleja del centro entre
-// frames, asi que una sola lectura fuera del centro NO significa que haya un menu.
-// Por eso un hilo muestrea el cursor cada ~1 ms y solo se considera GUI abierta
-// si el cursor lleva mas de GUI_GRACE_MS sin pasar por el centro.
-// Tiempo sin pasar por el centro antes de considerar que hay una GUI abierta.
-// Mas bajo = el clic se corta antes al abrir el inventario, pero si lo bajas
-// demasiado, mover la camara muy rapido puede cortar clics. Ajustable (40-100).
+// en cada frame. Solo se considera GUI abierta si el cursor lleva mas de
+// GUI_GRACE_MS sin pasar por el centro.
 constexpr long long GUI_GRACE_MS = 60;
 std::atomic<long long> g_lastInGameMs{ 0 };
 
 // Senal rapida para 1.8.9 (LWJGL 2): jugando, Minecraft pone un cursor transparente
-// propio; con una GUI abierta vuelve a un cursor estandar de Windows (flecha, texto,
-// mano...). Eso se detecta al instante, sin esperar al periodo de gracia.
-// Solo se usa si ya se ha comprobado que en juego NO aparece un cursor estandar
-// (g_cursorSignalValid); si en algun PC no funciona, se sigue con el metodo del centro.
+// propio; con una GUI abierta vuelve a un cursor estandar de Windows.
 std::atomic<bool> g_cursorStd{ false };
 std::atomic<bool> g_cursorSignalValid{ false };
 
@@ -214,6 +237,11 @@ bool IsStandardCursor(HCURSOR c) {
     return false;
 }
 
+bool GuiOpen() {
+    if (g_cursorSignalValid.load() && g_cursorStd.load()) return true;   // instantaneo
+    return NowMs() - g_lastInGameMs.load() > GUI_GRACE_MS;               // respaldo
+}
+
 void GuiMonitor() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     PreciseTimer timer;
@@ -222,6 +250,10 @@ void GuiMonitor() {
     auto nextFocusCheck = Clock::now();
     auto tick = Clock::now();
     g_lastInGameMs.store(NowMs());
+
+    // Seguimiento del slot de la hotbar: teclas 1-9 y rueda del raton, solo jugando.
+    bool prevNum[9]{};
+    int wheelRemainder = 0;
 
     while (g_running.load()) {
         const auto now = Clock::now();
@@ -248,7 +280,6 @@ void GuiMonitor() {
             CURSORINFO ci{};
             ci.cbSize = sizeof(ci);
             if (GetCursorInfo(&ci)) stdCursor = IsStandardCursor(ci.hCursor);
-            // Calibracion: jugando (cursor en el centro) y sin cursor estandar => la senal es fiable.
             if (centered && !stdCursor) g_cursorSignalValid.store(true);
         }
         g_cursorStd.store(stdCursor);
@@ -256,15 +287,37 @@ void GuiMonitor() {
         // Sin Minecraft enfocado no hay GUI que bloquear.
         if (!focused || centered) g_lastInGameMs.store(NowMs());
 
+        // ---- Slot de la hotbar ----
+        const bool inGame = focused && !GuiOpen();
+        const int wheel = g_wheelAccum.exchange(0);
+        int slot = g_slot.load();
+        const int before = slot;
+        if (inGame) {
+            // Rueda hacia abajo = slot siguiente (como en Minecraft).
+            wheelRemainder += wheel;
+            while (wheelRemainder <= -WHEEL_DELTA) { slot = (slot + 1) % 9; wheelRemainder += WHEEL_DELTA; }
+            while (wheelRemainder >=  WHEEL_DELTA) { slot = (slot + 8) % 9; wheelRemainder -= WHEEL_DELTA; }
+        } else {
+            wheelRemainder = 0;
+        }
+        for (int k = 0; k < 9; ++k) {
+            const bool down = (GetAsyncKeyState('1' + k) & 0x8000) != 0;
+            if (inGame && down && !prevNum[k]) slot = k;
+            prevNum[k] = down;
+        }
+        if (slot != before) {
+            g_slot.store(slot);
+            PostMessageW(g_hwnd, WM_APP, 0, 0);
+        }
+
         tick += std::chrono::milliseconds(1);
         if (tick < Clock::now()) tick = Clock::now() + std::chrono::milliseconds(1);
         timer.SleepUntil(tick, false);
     }
 }
 
-bool GuiOpen() {
-    if (g_cursorSignalValid.load() && g_cursorStd.load()) return true;   // instantaneo
-    return NowMs() - g_lastInGameMs.load() > GUI_GRACE_MS;               // respaldo
+bool SlotAllowed() {
+    return (g_slotMask.load() >> g_slot.load()) & 1;
 }
 
 void ClickOnce(int holdMs, PreciseTimer& timer) {
@@ -273,60 +326,18 @@ void ClickOnce(int holdMs, PreciseTimer& timer) {
     input[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
     input[1].type = INPUT_MOUSE;
     input[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-
-    // Enviar down y up como dos eventos separados permite que Windows/Minecraft
-    // procese el clic completo. Si falla, el bucle continua y se puede diagnosticar.
     SendInput(1, &input[0], sizeof(INPUT));
     timer.SleepUntil(Clock::now() + std::chrono::milliseconds(holdMs), false);
     SendInput(1, &input[1], sizeof(INPUT));
 }
 
-void RefreshUI() {
-    wchar_t buf[128]{};
-    int vk = g_key.load();
-    if (g_binding.load()) {
-        wcscpy_s(buf, L"Pulsa una tecla...");
-    } else if (!vk) {
-        wcscpy_s(buf, L"Ninguna");
-    } else {
-        UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
-        LONG keyNameParam = static_cast<LONG>(sc << 16);
-        if (!GetKeyNameTextW(keyNameParam, buf, static_cast<int>(std::size(buf))))
-            swprintf_s(buf, L"VK %d", vk);
-    }
-    if (g_btnBind) { SetWindowTextW(g_btnBind, buf); InvalidateRect(g_btnBind, nullptr, TRUE); }
-    if (g_lblStatus) {
-        const wchar_t* state = g_binding ? L"Estado: elige una tecla" :
-            (g_enabled ? L"●  ACTIVADO" : L"●  DESACTIVADO");
-        SetWindowTextW(g_lblStatus, state);
-    }
-}
+void Redraw() { if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE); }
 
 void RefreshSliders() {
     auto* cpsData = reinterpret_cast<SliderData*>(GetWindowLongPtrW(g_sldCps, GWLP_USERDATA));
     if (!cpsData) return;
     g_cpsX10.store(cpsData->value);
-    wchar_t b[32]{};
-    swprintf_s(b, L"%.1f", cpsData->value / 10.0);
-    if (g_lblCps) SetWindowTextW(g_lblCps, b);
-}
-
-void DrawGradient(HDC dc, const RECT& rc, COLORREF left, COLORREF right) {
-    const int width = rc.right - rc.left;
-    const int height = rc.bottom - rc.top;
-    if (width <= 0 || height <= 0) return;
-    for (int x = 0; x < width; ++x) {
-        const double t = width > 1 ? static_cast<double>(x) / (width - 1) : 0.0;
-        BYTE r = static_cast<BYTE>(GetRValue(left) + (GetRValue(right) - GetRValue(left)) * t);
-        BYTE g = static_cast<BYTE>(GetGValue(left) + (GetGValue(right) - GetGValue(left)) * t);
-        BYTE b = static_cast<BYTE>(GetBValue(left) + (GetBValue(right) - GetBValue(left)) * t);
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(r, g, b));
-        HPEN old = static_cast<HPEN>(SelectObject(dc, pen));
-        MoveToEx(dc, rc.left + x, rc.top, nullptr);
-        LineTo(dc, rc.left + x, rc.bottom);
-        SelectObject(dc, old);
-        DeleteObject(pen);
-    }
+    if (g_hwnd) InvalidateRect(g_hwnd, &kRcCpsLabel, FALSE);
 }
 
 void UpdateSliderFromPoint(HWND hwnd, int x) {
@@ -339,7 +350,6 @@ void UpdateSliderFromPoint(HWND hwnd, int x) {
     data->value = data->minimum + static_cast<int>(ratio * (data->maximum - data->minimum) + 0.5);
     InvalidateRect(hwnd, nullptr, FALSE);
     RefreshSliders();
-    PostMessageW(GetParent(hwnd), WM_HSCROLL, MAKEWPARAM(0, TB_THUMBTRACK), reinterpret_cast<LPARAM>(hwnd));
 }
 
 LRESULT CALLBACK SliderProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
@@ -361,11 +371,11 @@ LRESULT CALLBACK SliderProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         RECT rc{}; GetClientRect(hwnd, &rc);
         HDC mem = CreateCompatibleDC(dc); HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
         HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(mem, bmp));
-        HBRUSH bg = CreateSolidBrush(COL_BG); FillRect(mem, &rc, bg); DeleteObject(bg);
+        HBRUSH bg = CreateSolidBrush(COL_PANEL); FillRect(mem, &rc, bg); DeleteObject(bg);
         {
             Gp::Graphics g(mem);
             g.SetSmoothingMode(Gp::SmoothingModeAntiAlias);
-            const float th = 14.0f;                                   // grosor de la barra
+            const float th = 12.0f;
             const float cy = rc.bottom / 2.0f;
             const float trackL = 7.0f, trackR = static_cast<float>(rc.right) - 7.0f;
             const float left = 13.0f, right = (std::max)(left + 1.0f, static_cast<float>(rc.right) - 13.0f);
@@ -374,7 +384,6 @@ LRESULT CALLBACK SliderProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             const float ratio = static_cast<float>(value - minimum) / static_cast<float>((std::max)(1, maximum - minimum));
             const float thumbX = left + ratio * (right - left);
 
-            // Barra de fondo
             Gp::RectF track(trackL, cy - th / 2.0f, trackR - trackL, th);
             Gp::GraphicsPath trackPath; RoundRectPath(trackPath, track, th / 2.0f);
             Gp::SolidBrush trackBrush(GdipColor(COL_TRACK));
@@ -382,24 +391,22 @@ LRESULT CALLBACK SliderProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             Gp::Pen trackPen(GdipColor(RGB(58, 55, 72)), 1.0f);
             g.DrawPath(&trackPen, &trackPath);
 
-            // Relleno con degradado
             Gp::RectF fill(trackL, track.Y, (std::max)(th, thumbX - trackL), th);
             Gp::GraphicsPath fillPath; RoundRectPath(fillPath, fill, th / 2.0f);
             Gp::LinearGradientBrush fillBrush(fill, GdipColor(COL_PURPLE_DARK), GdipColor(COL_PURPLE_LIGHT),
                                               Gp::LinearGradientModeHorizontal);
             g.FillPath(&fillBrush, &fillPath);
 
-            // Pomo: aura al arrastrar, sombra, circulo claro y punto morado
             if (data && data->dragging) {
                 Gp::SolidBrush glow(GdipColor(COL_PURPLE, 70));
-                g.FillEllipse(&glow, thumbX - 13.0f, cy - 13.0f, 26.0f, 26.0f);
+                g.FillEllipse(&glow, thumbX - 12.0f, cy - 12.0f, 24.0f, 24.0f);
             }
             Gp::SolidBrush shadow(GdipColor(RGB(0, 0, 0), 110));
-            g.FillEllipse(&shadow, thumbX - 11.0f, cy - 10.0f, 22.0f, 22.0f);
+            g.FillEllipse(&shadow, thumbX - 10.0f, cy - 9.0f, 20.0f, 20.0f);
             Gp::SolidBrush thumb(GdipColor(RGB(240, 230, 255)));
-            g.FillEllipse(&thumb, thumbX - 10.0f, cy - 10.0f, 20.0f, 20.0f);
+            g.FillEllipse(&thumb, thumbX - 9.0f, cy - 9.0f, 18.0f, 18.0f);
             Gp::SolidBrush dot(GdipColor(COL_PURPLE));
-            g.FillEllipse(&dot, thumbX - 4.5f, cy - 4.5f, 9.0f, 9.0f);
+            g.FillEllipse(&dot, thumbX - 4.0f, cy - 4.0f, 8.0f, 8.0f);
         }
         BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
         SelectObject(mem, oldBmp); DeleteObject(bmp); DeleteDC(mem); EndPaint(hwnd, &ps); return 0;
@@ -417,7 +424,7 @@ void Worker() {
     bool wasActive = false;
     auto next = clock::now();
 
-    // Historial de clics (fisicos + automaticos) de el ultimo segundo
+    // Historial de clics (fisicos + automaticos) del ultimo segundo
     std::deque<clock::time_point> history;
     auto trim = [&](clock::time_point t) {
         while (!history.empty() && t - history.front() >= std::chrono::milliseconds(1000))
@@ -437,7 +444,7 @@ void Worker() {
                     break;
                 }
             }
-            prevDown = false;
+            prevDown = true;   // no activar con la misma pulsacion que asigna la tecla
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
@@ -458,8 +465,9 @@ void Worker() {
         trim(clock::now());
 
         // Solo se puede clicar jugando: nunca en menus, inventarios, cofres, aldeanos...
+        // y solo con un slot de la hotbar permitido.
         const bool menuBlocked = g_pressInMenu.load() || GuiOpen();
-        const bool canClick = g_enabled.load() && held &&
+        const bool canClick = g_enabled.load() && held && SlotAllowed() &&
                               MinecraftFocused() && !menuBlocked;
         if (!canClick) {
             wasActive = false;
@@ -467,8 +475,6 @@ void Worker() {
             continue;
         }
 
-        // CPS del slider (max 16) con variacion fija de +-0.5 CPS por clic:
-        // ronda entre 15 y 16 y nunca supera 16.
         const double target = std::clamp(g_cpsX10.load() / 10.0, 1.0, kMaxCps);
         std::uniform_real_distribution<double> wobble(-0.5, 0.5);
         const double cps = std::clamp(target + wobble(rng), 1.0, kMaxCps);
@@ -481,13 +487,10 @@ void Worker() {
             next = clock::now() + interval;   // el primer clic automatico espera un intervalo
         }
 
-        // No ponerse al dia con clics acumulados tras una pausa del sistema:
-        // cada clic debe respetar el intervalo minimo calculado.
         auto now = clock::now();
         if (now < next) {
             timer.SleepUntil(next);
-            // Reconfirmar solo con comprobaciones baratas para no retrasar el clic.
-            if (!g_lmbHeld.load() || !g_enabled.load() || GuiOpen()) continue;
+            if (!g_lmbHeld.load() || !g_enabled.load() || GuiOpen() || !SlotAllowed()) continue;
         }
 
         // Limite duro: nunca mas de 16 clics (contando el fisico) en cualquier ventana de 1 s
@@ -497,7 +500,7 @@ void Worker() {
             continue;
         }
 
-        if (!g_lmbHeld.load() || !g_enabled.load() || GuiOpen()) continue;
+        if (!g_lmbHeld.load() || !g_enabled.load() || GuiOpen() || !SlotAllowed()) continue;
 
         const auto clickStart = clock::now();
         std::uniform_int_distribution<int> hold(8, 16);
@@ -511,31 +514,153 @@ void Worker() {
     }
 }
 
+// ---- Dibujo de la ventana principal ----
+void DrawLabel(HDC dc, const wchar_t* s, RECT r, HFONT f, COLORREF c, UINT fmt = DT_LEFT) {
+    HFONT old = static_cast<HFONT>(SelectObject(dc, f));
+    SetTextColor(dc, c);
+    DrawTextW(dc, s, -1, &r, fmt | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, old);
+}
+
+void DrawCheckbox(HDC dc, Gp::Graphics& g, const RECT& r, const wchar_t* label, bool checked) {
+    const float y = static_cast<float>(r.top + (r.bottom - r.top - 16) / 2);
+    Gp::RectF box(static_cast<float>(r.left) + 0.5f, y + 0.5f, 15.0f, 15.0f);
+    Gp::GraphicsPath p; RoundRectPath(p, box, 3.0f);
+    if (checked) {
+        Gp::LinearGradientBrush br(box, GdipColor(COL_PURPLE_DARK), GdipColor(COL_PURPLE_LIGHT),
+                                   Gp::LinearGradientModeForwardDiagonal);
+        g.FillPath(&br, &p);
+        Gp::Pen tick(GdipColor(RGB(255, 255, 255)), 2.0f);
+        tick.SetStartCap(Gp::LineCapRound); tick.SetEndCap(Gp::LineCapRound);
+        Gp::PointF pts[3] = { {box.X + 3.5f, box.Y + 8.0f}, {box.X + 6.5f, box.Y + 11.0f}, {box.X + 12.0f, box.Y + 4.5f} };
+        g.DrawLines(&tick, pts, 3);
+    } else {
+        Gp::SolidBrush br(GdipColor(COL_TRACK));
+        g.FillPath(&br, &p);
+        Gp::Pen pen(GdipColor(RGB(70, 66, 84)), 1.0f);
+        g.DrawPath(&pen, &p);
+    }
+    RECT tr{ r.left + 26, r.top, r.right + 200, r.bottom };
+    DrawLabel(dc, label, tr, g_fLabel, COL_TEXT);
+}
+
+void PaintMain(HWND h, HDC dc) {
+    RECT rc{}; GetClientRect(h, &rc);
+    HBRUSH bg = CreateSolidBrush(COL_BG); FillRect(dc, &rc, bg); DeleteObject(bg);
+    SetBkMode(dc, TRANSPARENT);
+
+    // Cabecera
+    DrawLabel(dc, L"AstralMC Clicker", RECT{20, 7, rc.right - 15, 36}, g_fTitle, RGB(246, 241, 255));
+    DrawLabel(dc, L"Astralmc.cc", RECT{21, 34, rc.right - 15, 53}, g_fSub, COL_PURPLE_LIGHT);
+
+    Gp::Graphics g(dc);
+    g.SetSmoothingMode(Gp::SmoothingModeAntiAlias);
+    {
+        Gp::RectF line(20.0f, 60.0f, static_cast<float>(rc.right) - 40.0f, 2.0f);
+        Gp::LinearGradientBrush lb(line, GdipColor(COL_PURPLE), GdipColor(COL_BG), Gp::LinearGradientModeHorizontal);
+        g.FillRectangle(&lb, line);
+    }
+
+    // Panel "Left clicker"
+    {
+        Gp::RectF panel(kPanelL + 0.5f, kPanelT + 0.5f, kPanelR - kPanelL - 1.0f, kPanelB - kPanelT - 1.0f);
+        Gp::GraphicsPath p; RoundRectPath(p, panel, 10.0f);
+        Gp::SolidBrush br(GdipColor(COL_PANEL));
+        g.FillPath(&br, &p);
+        Gp::Pen pen(GdipColor(COL_BORDER), 1.0f);
+        g.DrawPath(&pen, &p);
+    }
+    DrawLabel(dc, L"Left clicker", RECT{kIX, 82, kIR, 104}, g_fGroup, COL_PURPLE_LIGHT);
+
+    DrawCheckbox(dc, g, kRcEnabled, L"Enabled", g_enabled.load());
+
+    DrawLabel(dc, L"Clicks per second", kRcCpsLabel, g_fLabel, COL_TEXT);
+    wchar_t cps[16]{}; swprintf_s(cps, L"%.1f", g_cpsX10.load() / 10.0);
+    DrawLabel(dc, cps, kRcCpsLabel, g_fLabel, COL_PURPLE_LIGHT, DT_RIGHT);
+
+    DrawCheckbox(dc, g, kRcInventory, L"Click on inventory", false);
+
+    DrawLabel(dc, L"Whitelisted hotbar slots", kRcSlotsLbl, g_fLabel, COL_TEXT);
+    const int mask = g_slotMask.load(), cur = g_slot.load();
+    for (int i = 0; i < 9; ++i) {
+        const RECT r = SlotRect(i);
+        const bool on = (mask >> i) & 1;
+        // Casilla con tick: morada y marcada = activa; vacia y gris = desactivada.
+        const float s = 22.0f;
+        const float x0 = r.left + (kSlotSize - s) / 2.0f, y0 = r.top + 0.5f;
+        Gp::RectF sq(x0, y0, s, s);
+        Gp::GraphicsPath p; RoundRectPath(p, sq, 4.0f);
+        if (on) {
+            Gp::LinearGradientBrush br(sq, GdipColor(COL_PURPLE_LIGHT), GdipColor(COL_PURPLE), Gp::LinearGradientModeForwardDiagonal);
+            g.FillPath(&br, &p);
+            Gp::Pen tick(GdipColor(RGB(255, 255, 255)), 2.6f);
+            tick.SetStartCap(Gp::LineCapRound); tick.SetEndCap(Gp::LineCapRound);
+            tick.SetLineJoin(Gp::LineJoinRound);
+            Gp::PointF pts[3] = { {x0 + 5.0f, y0 + 11.5f}, {x0 + 9.5f, y0 + 16.0f}, {x0 + 17.0f, y0 + 6.5f} };
+            g.DrawLines(&tick, pts, 3);
+        } else {
+            Gp::SolidBrush br(GdipColor(RGB(24, 24, 31)));
+            g.FillPath(&br, &p);
+            Gp::Pen pen(GdipColor(RGB(88, 84, 104)), 1.5f);
+            g.DrawPath(&pen, &p);
+        }
+        // Slot que tienes en la mano: rayita blanca debajo.
+        if (i == cur) {
+            Gp::SolidBrush mark(GdipColor(RGB(255, 255, 255)));
+            g.FillRectangle(&mark, x0 + 5.0f, y0 + s + 4.0f, s - 10.0f, 2.5f);
+        }
+    }
+
+    // Boton "Bind"
+    {
+        const bool active = g_binding.load();
+        Gp::RectF b(kRcBind.left + 0.5f, kRcBind.top + 0.5f, kRcBind.right - kRcBind.left - 1.0f, kRcBind.bottom - kRcBind.top - 1.0f);
+        Gp::GraphicsPath p; RoundRectPath(p, b, 8.0f);
+        Gp::LinearGradientBrush br(b, active ? GdipColor(RGB(91, 55, 137)) : GdipColor(RGB(36, 35, 46)),
+                                   active ? GdipColor(RGB(151, 94, 219)) : GdipColor(RGB(43, 41, 53)),
+                                   Gp::LinearGradientModeHorizontal);
+        g.FillPath(&br, &p);
+        Gp::Pen pen(active ? GdipColor(COL_PURPLE_LIGHT) : GdipColor(RGB(66, 62, 78)), 1.0f);
+        g.DrawPath(&pen, &p);
+
+        wchar_t text[128]{};
+        const int vk = g_key.load();
+        if (active) {
+            wcscpy_s(text, L"Bind: press a key...  (Esc = none)");
+        } else if (!vk) {
+            wcscpy_s(text, L"Bind: None");
+        } else {
+            wchar_t name[64]{};
+            UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC);
+            if (!GetKeyNameTextW(static_cast<LONG>(sc << 16), name, static_cast<int>(std::size(name))))
+                swprintf_s(name, L"VK %d", vk);
+            swprintf_s(text, L"Bind: %s", name);
+        }
+        DrawLabel(dc, text, kRcBind, g_fLabel, COL_TEXT, DT_CENTER);
+    }
+
+    // Estado
+    const bool on = g_enabled.load();
+    DrawLabel(dc, on ? L"●  ON" : L"●  OFF", kRcStatus, g_fLabel, on ? COL_GREEN : COL_RED);
+    wchar_t slotTxt[48]{};
+    swprintf_s(slotTxt, L"Current slot: %d%s", cur + 1, SlotAllowed() ? L"" : L"  (blocked)");
+    DrawLabel(dc, slotTxt, kRcStatus, g_fSmall, COL_MUTED, DT_RIGHT);
+}
+
+bool InRect(const RECT& r, int x, int y, int padRight = 0) {
+    return x >= r.left && x < r.right + padRight && y >= r.top && y < r.bottom;
+}
+
 LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     switch (msg) {
     case WM_CREATE: {
         g_hwnd = h;
         HINSTANCE hi = reinterpret_cast<LPCREATESTRUCTW>(l)->hInstance;
-        HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-        auto mk = [&](const wchar_t* cls, const wchar_t* txt, DWORD style,
-                      int x, int y, int cx, int cy, int id) -> HWND {
-            HWND c = CreateWindowW(cls, txt, WS_CHILD | WS_VISIBLE | style,
-                x, y, cx, cy, h, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), hi, nullptr);
-            if (c) SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-            return c;
-        };
-
-        mk(L"STATIC", L"TECLA DE ACTIVACIÓN", 0, 20, 83, 240, 20, 0);
-        g_btnBind = mk(L"BUTTON", L"Ninguna", BS_OWNERDRAW, 330, 75, 130, 34, ID_BIND);
-        mk(L"STATIC", L"CLICKS POR SEGUNDO", 0, 20, 127, 220, 20, 0);
-        g_lblCps = mk(L"STATIC", L"15.5", SS_RIGHT, 390, 124, 65, 25, ID_CPSVAL);
-        g_sldCps = mk(L"AstralSlider", L"", 0, 20, 146, 440, 34, ID_CPS);
+        g_sldCps = CreateWindowW(L"AstralSlider", L"", WS_CHILD | WS_VISIBLE,
+            kIX - 7, kSliderY, kIR - kIX + 14, kSliderH, h,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_CPS)), hi, nullptr);
         SetWindowLongPtrW(g_sldCps, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&g_cpsData));
-
-        g_lblStatus = mk(L"STATIC", L"●  DESACTIVADO", 0, 20, 200, 420, 22, ID_STATUS);
-
         RefreshSliders();
-        RefreshUI();
         return 0;
     }
     case WM_ERASEBKGND:
@@ -543,116 +668,50 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC dc = BeginPaint(h, &ps);
-        RECT rc{};
-        GetClientRect(h, &rc);
-        HBRUSH bg = g_darkBrush ? g_darkBrush : CreateSolidBrush(COL_BG);
-        FillRect(dc, &rc, bg);
-        if (!g_darkBrush) DeleteObject(bg);
-
-        // Cabecera sin imagen externa: solo título y dirección del servidor.
-        SetBkMode(dc, TRANSPARENT);
-        HFONT titleFont = CreateFontW(23, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-        HFONT oldFont = (HFONT)SelectObject(dc, titleFont);
-        SetTextColor(dc, RGB(246, 241, 255));
-        RECT titleRc{20, 7, rc.right - 15, 36};
-        DrawTextW(dc, L"AstralMC Clicker", -1, &titleRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(dc, oldFont);
-        DeleteObject(titleFont);
-        HFONT subFont = CreateFontW(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-        oldFont = (HFONT)SelectObject(dc, subFont);
-        SetTextColor(dc, COL_PURPLE_LIGHT);
-        RECT subRc{21, 34, rc.right - 15, 53};
-        DrawTextW(dc, L"Astralmc.cc", -1, &subRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(dc, oldFont);
-        DeleteObject(subFont);
-        {
-            Gp::Graphics g(dc);
-            Gp::RectF line(20.0f, 62.0f, static_cast<float>(rc.right) - 40.0f, 2.0f);
-            Gp::LinearGradientBrush lb(line, GdipColor(COL_PURPLE), GdipColor(COL_BG),
-                                        Gp::LinearGradientModeHorizontal);
-            g.FillRectangle(&lb, line);
-        }
+        RECT rc{}; GetClientRect(h, &rc);
+        HDC mem = CreateCompatibleDC(dc);
+        HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(mem, bmp));
+        PaintMain(h, mem);
+        BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, oldBmp); DeleteObject(bmp); DeleteDC(mem);
         EndPaint(h, &ps);
         return 0;
     }
-    case WM_CTLCOLORSTATIC: {
-        HDC dc = (HDC)w;
-        SetTextColor(dc, GetDlgCtrlID(reinterpret_cast<HWND>(l)) == ID_NOTE ? COL_MUTED : COL_TEXT);
-        SetBkColor(dc, COL_BG);
-        SetBkMode(dc, TRANSPARENT);
-        return (LRESULT)(g_darkBrush ? g_darkBrush : GetStockObject(BLACK_BRUSH));
-    }
-    case WM_CTLCOLOREDIT: {
-        HDC dc = (HDC)w;
-        SetTextColor(dc, COL_PURPLE_LIGHT);
-        SetBkColor(dc, COL_PANEL);
-        return (LRESULT)(g_darkBrush ? g_darkBrush : GetStockObject(BLACK_BRUSH));
-    }
-    case WM_CTLCOLORBTN: {
-        HDC dc = (HDC)w;
-        SetTextColor(dc, COL_TEXT);
-        SetBkColor(dc, COL_PANEL);
-        return (LRESULT)(g_darkBrush ? g_darkBrush : GetStockObject(BLACK_BRUSH));
-    }
-    case WM_DRAWITEM: {
-        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(l);
-        if (dis && dis->CtlID == ID_BIND) {
-            const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
-            const bool active = g_binding.load();
-            const int W = dis->rcItem.right - dis->rcItem.left;
-            const int H = dis->rcItem.bottom - dis->rcItem.top;
-
-            HDC mem = CreateCompatibleDC(dis->hDC);
-            HBITMAP bmp = CreateCompatibleBitmap(dis->hDC, W, H);
-            HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(mem, bmp));
-            RECT full{0, 0, W, H};
-            HBRUSH bg = CreateSolidBrush(COL_BG); FillRect(mem, &full, bg); DeleteObject(bg);
-
-            {
-                Gp::Graphics g(mem);
-                g.SetSmoothingMode(Gp::SmoothingModeAntiAlias);
-                Gp::RectF pill(1.5f, 1.5f, W - 3.0f, H - 3.0f);
-                Gp::GraphicsPath path;
-                RoundRectPath(path, pill, 10.0f);
-                Gp::Color c1 = active ? GdipColor(RGB(91, 55, 137)) : GdipColor(pressed ? RGB(47, 39, 61) : RGB(34, 33, 43));
-                Gp::Color c2 = active ? GdipColor(RGB(151, 94, 219)) : GdipColor(RGB(43, 41, 53));
-                Gp::LinearGradientBrush br(pill, c1, c2, Gp::LinearGradientModeHorizontal);
-                g.FillPath(&br, &path);
-                Gp::Pen pen(active ? GdipColor(COL_PURPLE_LIGHT) : GdipColor(RGB(66, 62, 78)), 1.3f);
-                g.DrawPath(&pen, &path);
-            }
-
-            // Texto (GDI, ClearType)
-            SetBkMode(mem, TRANSPARENT);
-            wchar_t text[128]{}; GetWindowTextW(dis->hwndItem, text, 128);
-            HFONT f = MakeFont(15, FW_SEMIBOLD);
-            HFONT oldF = static_cast<HFONT>(SelectObject(mem, f));
-            SetTextColor(mem, active ? RGB(255, 250, 255) : COL_TEXT);
-            RECT tr = full;
-            DrawTextW(mem, text, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(mem, oldF); DeleteObject(f);
-
-            BitBlt(dis->hDC, dis->rcItem.left, dis->rcItem.top, W, H, mem, 0, 0, SRCCOPY);
-            SelectObject(mem, oldBmp); DeleteObject(bmp); DeleteDC(mem);
-            return TRUE;
-        }
+    case WM_SETCURSOR: {
+        POINT pt{}; GetCursorPos(&pt); ScreenToClient(h, &pt);
+        bool hot = InRect(kRcEnabled, pt.x, pt.y) || InRect(kRcInventory, pt.x, pt.y) || InRect(kRcBind, pt.x, pt.y);
+        for (int i = 0; i < 9 && !hot; ++i) hot = InRect(SlotRect(i), pt.x, pt.y);
+        if (hot && LOWORD(l) == HTCLIENT) { SetCursor(LoadCursorW(nullptr, IDC_HAND)); return TRUE; }
         break;
     }
-    case WM_HSCROLL:
-        RefreshSliders();
-        return 0;
-    case WM_COMMAND:
-        if (LOWORD(w) == ID_BIND) {
+    case WM_LBUTTONDOWN: {
+        const int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
+        if (InRect(kRcEnabled, x, y)) {
+            g_enabled.store(!g_enabled.load());
+            Redraw();
+        } else if (InRect(kRcInventory, x, y)) {
+            // Politica del servidor: no se permite autoclick en inventarios (refill = baneable).
+            MessageBoxW(h,
+                L"Autoclicker for click on inventory is not allowed on AstralMC.\n"
+                L"Just for PvP.",
+                L"AstralMC", MB_ICONWARNING | MB_OK);
+        } else if (InRect(kRcBind, x, y)) {
             g_binding.store(true);
-            RefreshUI();
+            Redraw();
+        } else {
+            for (int i = 0; i < 9; ++i) {
+                if (InRect(SlotRect(i), x, y)) {
+                    g_slotMask.store(g_slotMask.load() ^ (1 << i));
+                    Redraw();
+                    break;
+                }
+            }
         }
         return 0;
+    }
     case WM_APP:
-        RefreshUI();
+        Redraw();
         return 0;
     case WM_DESTROY:
         g_running.store(false);
@@ -672,8 +731,6 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
         return 1;
     }
     timeBeginPeriod(1);
-    // Evitar que Windows 11 limite la precision del temporizador cuando la
-    // ventana queda tapada por Minecraft, y dar prioridad a los hilos de entrada.
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     {
@@ -687,6 +744,12 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
     Gp::GdiplusStartupInput gdipInput;
     ULONG_PTR gdipToken = 0;
     Gp::GdiplusStartup(&gdipToken, &gdipInput, nullptr);
+
+    g_fTitle = MakeFont(23, FW_BOLD);
+    g_fSub   = MakeFont(12, FW_NORMAL);
+    g_fGroup = MakeFont(16, FW_BOLD);
+    g_fLabel = MakeFont(14, FW_SEMIBOLD);
+    g_fSmall = MakeFont(12, FW_SEMIBOLD);
 
     WNDCLASSW sliderClass{};
     sliderClass.lpfnWndProc = SliderProc;
@@ -704,7 +767,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hi;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.hbrBackground = nullptr;
     wc.lpszClassName = L"AstralClickerWindow";
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         timeEndPeriod(1);
@@ -712,10 +775,11 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
         return 1;
     }
 
-    g_darkBrush = CreateSolidBrush(COL_BG);
-    HWND h = CreateWindowW(wc.lpszClassName, L"AstralMC Clicker",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 300, nullptr, nullptr, hi, nullptr);
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+    RECT wr{ 0, 0, kClientW, kClientH };
+    AdjustWindowRect(&wr, style, FALSE);
+    HWND h = CreateWindowW(wc.lpszClassName, L"AstralMC Clicker", style,
+        CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, nullptr, nullptr, hi, nullptr);
     if (!h) {
         timeEndPeriod(1);
         MessageBoxW(nullptr, L"No se pudo crear la ventana.", L"Error", MB_ICONERROR);
@@ -749,7 +813,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, PWSTR, int show) {
     if (monitor.joinable()) monitor.join();
     if (g_mouseHook) UnhookWindowsHookEx(g_mouseHook);
     timeEndPeriod(1);
-    if (g_darkBrush) DeleteObject(g_darkBrush);
+    for (HFONT f : { g_fTitle, g_fSub, g_fGroup, g_fLabel, g_fSmall }) if (f) DeleteObject(f);
     Gp::GdiplusShutdown(gdipToken);
     return result == -1 ? 1 : 0;
 }
