@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AstralMC Clicker</title>
+<meta name="description" content="Autoclicker oficial de AstralMC para Minecraft Java. Máximo 16 CPS, sin módulos extra.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #14151b; --panel: #1d1e27; --line: #2c2a35;
+    --purple: #915bdc; --purple-l: #be96ff; --purple-d: #53307d;
+    --text: #ebe9f2; --muted: #9d9db1;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; line-height: 1.6; }
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1;
+    background: radial-gradient(60rem 30rem at 50% -10%, rgba(145,91,220,.28), transparent 70%); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+  header { padding: 72px 0 40px; text-align: center; }
+  .tag { display: inline-block; font-size: 13px; color: var(--purple-l); border: 1px solid var(--purple-d);
+    padding: 4px 12px; border-radius: 999px; margin-bottom: 18px; }
+  h1 { font-size: clamp(36px, 7vw, 60px); line-height: 1.05; margin: 0 0 14px; font-weight: 800; letter-spacing: -.02em; }
+  h1 span { background: linear-gradient(90deg, var(--purple-l), var(--purple)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { color: var(--muted); font-size: 18px; max-width: 620px; margin: 0 auto 30px; }
+  .btn { display: inline-flex; gap: 10px; align-items: center; text-decoration: none; font-weight: 600; color: #fff;
+    background: linear-gradient(90deg, var(--purple-d), var(--purple)); padding: 14px 28px; border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(145,91,220,.35); transition: transform .15s; }
+  .btn:hover { transform: translateY(-2px); }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); box-shadow: none; color: var(--text); }
+  .actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .small { font-size: 13px; color: var(--muted); margin-top: 14px; }
+  section { padding: 36px 0; }
+  h2 { font-size: 26px; margin: 0 0 18px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; color: var(--purple-l); }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .no { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 10px; }
+  .no li { background: var(--panel); border: 1px solid var(--line); padding: 8px 14px; border-radius: 10px; color: var(--muted); font-size: 14px; }
+  .no li::before { content: "✕ "; color: #e0657a; }
+  ol { padding-left: 20px; color: var(--muted); } ol li { margin-bottom: 6px; } ol b { color: var(--text); }
+  code { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font-size: 13px; word-break: break-all; }
+  footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--muted); font-size: 14px; text-align: center; }
+  a { color: var(--purple-l); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="tag">Astralmc.cc · Minecraft Java · Windows</div>
+    <h1><span>AstralMC</span> Clicker</h1>
+    <p class="lead">El autoclicker permitido en AstralMC. Limitado a 16 CPS, solo funciona dentro del juego y no tiene ningún otro módulo.</p>
+    <div class="actions">
+      <a class="btn" href="https://github.com/OldVersion24/AstralMC-Clicker/releases/latest/download/AstralClicker.exe">⬇ Descargar .exe</a>
+      <a class="btn ghost" href="https://github.com/OldVersion24/AstralMC-Clicker">Ver código fuente</a>
+    </div>
+    <p class="small">Windows 10/11 · ~210 KB · sin instalación</p>
+  </header>
+
+  <section>
+    <h2>Qué hace</h2>
+    <div class="grid">
+      <div class="card"><h3>Máximo 16 CPS</h3><p>Slider de 1.0 a 16.0 CPS y un límite duro: nunca más de 16 clics por segundo, contando tu clic real.</p></div>
+      <div class="card"><h3>Aleatoriedad fija</h3><p>Cada clic varía ±0.5 CPS para que el ritmo sea natural, sin pasar nunca de 16.</p></div>
+      <div class="card"><h3>Solo en Minecraft</h3><p>Únicamente clica con la ventana de Minecraft enfocada. En el resto de programas no hace nada.</p></div>
+      <div class="card"><h3>Bloqueado en menús</h3><p>Inventario, cofres, aldeanos, chat: en cualquier GUI se detiene solo.</p></div>
+      <div class="card"><h3>Tecla de activación</h3><p>Eliges la tecla que lo enciende y apaga. Funciona mientras mantienes el clic izquierdo.</p></div>
+      <div class="card"><h3>Código abierto</h3><p>Un único archivo C++ que cualquiera puede revisar y compilar.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Qué no tiene</h2>
+    <ul class="no">
+      <li>Reach</li><li>Aim assist</li><li>Macros</li><li>Clic derecho</li>
+      <li>Inyección en el juego</li><li>Conexión a internet</li><li>Archivos o registro</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Cómo usarlo</h2>
+    <ol>
+      <li>Abre <b>AstralClicker.exe</b>. Si SmartScreen avisa: <b>Más información → Ejecutar de todas formas</b>.</li>
+      <li>Pulsa el botón de tecla y elige tu <b>tecla de activación</b>.</li>
+      <li>Ajusta los <b>clicks por segundo</b>.</li>
+      <li>En Minecraft, pulsa la tecla y <b>mantén el clic izquierdo</b>.</li>
+    </ol>
+  </section>
+</div>
+<footer>
+  <div class="wrap">
+    Creado por el staff de AstralMC · Descárgalo solo desde esta página o desde
+    <a href="https://github.com/Yinoff/Clicker4Astral">el repositorio original</a>.
+  </div>
+</footer>
+</body>
+</html>
