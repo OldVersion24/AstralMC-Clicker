@@ -53,10 +53,10 @@
     <h1><span>AstralMC</span> Clicker</h1>
     <p class="lead">El autoclicker permitido en AstralMC. Limitado a 16 CPS, solo funciona dentro del juego y no tiene ningún otro módulo.</p>
     <div class="actions">
-      <a class="btn" href="https://github.com/OldVersion24/AstralMC-Clicker/releases/latest/download/AstralClicker.exe">⬇ Descargar .exe</a>
-      <a class="btn ghost" href="https://github.com/OldVersion24/AstralMC-Clicker">Ver código fuente</a>
+      <a class="btn" href="https://github.com/OldVersion24/AstralMC-Clicker/releases/latest/download/AstralClicker.exe">⬇ Descargar para Windows</a>
+      <a class="btn" href="https://github.com/OldVersion24/AstralMC-Clicker/releases/latest/download/AstralClicker-linux">⬇ Descargar para Linux</a>
     </div>
-    <p class="small">Windows 10/11 · ~210 KB · sin instalación</p>
+    <p class="small">Windows 10/11 · Linux (X11 / XWayland) · sin instalación · <a href="https://github.com/OldVersion24/AstralMC-Clicker">código fuente</a></p>
   </header>
 
   <section>
@@ -69,7 +69,7 @@
       <div class="card"><h3>Slots de la hotbar</h3><p>Marca en qué slots (1–9) quieres que funcione. En los demás no clica.</p></div>
       <div class="card"><h3>Sin clic en inventario</h3><p>El autoclick en inventarios (refill) es baneable en AstralMC. Solo para PvP.</p></div>
       <div class="card"><h3>Bind</h3><p>Eliges la tecla que lo enciende y apaga. Funciona mientras mantienes el clic izquierdo.</p></div>
-      <div class="card"><h3>Código abierto</h3><p>Un único archivo C++ que cualquiera puede revisar y compilar.</p></div>
+      <div class="card"><h3>Código abierto</h3><p>Código C++ que cualquiera puede revisar. GitHub compila los programas directamente desde el repositorio.</p></div>
     </div>
   </section>
 
@@ -89,6 +89,16 @@
       <li>Ajusta los <b>clicks per second</b> y marca los <b>slots de la hotbar</b>.</li>
       <li>En Minecraft, pulsa la tecla y <b>mantén el clic izquierdo</b>.</li>
     </ol>
+  </section>
+
+  <section>
+    <h2>Cómo abrirlo en Linux</h2>
+    <ol>
+      <li>Descarga <b>AstralClicker-linux</b>.</li>
+      <li>Dale permiso de ejecución: clic derecho → <b>Propiedades → Permitir ejecutar como programa</b>, o en la terminal <code>chmod +x AstralClicker-linux</code>.</li>
+      <li>Ábrelo con doble clic o con <code>./AstralClicker-linux</code>. Se usa igual que en Windows.</li>
+    </ol>
+    <p class="small">Funciona en X11 y en Wayland con Minecraft normal (XWayland). No funciona si fuerzas Minecraft a Wayland nativo. Requiere Ubuntu 22.04 o más nuevo, o equivalente.</p>
   </section>
 </div>
 <footer>
