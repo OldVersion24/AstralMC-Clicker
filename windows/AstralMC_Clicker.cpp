@@ -69,6 +69,7 @@ std::atomic<int>  g_key{ 0 };
 // Hotbar: slot seleccionado (0-8) y mascara de slots permitidos (bit i = slot i+1).
 std::atomic<int>  g_slot{ 0 };
 std::atomic<int>  g_slotMask{ 0x1FF };     // por defecto los 9 slots activos
+std::atomic<bool> g_breakBlocks{ true };   // "Break blocks": se puede romper bloques sin apagar el clicker
 std::atomic<int>  g_wheelAccum{ 0 };       // delta de rueda pendiente (eventos fisicos)
 
 HWND g_hwnd = nullptr, g_sldCps = nullptr;
@@ -88,17 +89,18 @@ constexpr COLORREF COL_GREEN = RGB(110, 214, 140);
 constexpr COLORREF COL_RED = RGB(224, 101, 122);
 
 // ---- Layout (coordenadas de cliente) ----
-constexpr int kClientW = 480, kClientH = 392;
-constexpr int kPanelL = 16, kPanelT = 74, kPanelR = kClientW - 16, kPanelB = 352;
+constexpr int kClientW = 480, kClientH = 420;
+constexpr int kPanelL = 16, kPanelT = 74, kPanelR = kClientW - 16, kPanelB = 380;
 constexpr int kIX = 32, kIR = kClientW - 32;            // margen interior
 const RECT kRcEnabled   { kIX, 112, kIX + 160, 130 };
 const RECT kRcCpsLabel  { kIX, 140, kIR, 158 };
 constexpr int kSliderY = 158, kSliderH = 32;
-const RECT kRcInventory { kIX, 200, kIX + 200, 218 };
-const RECT kRcSlotsLbl  { kIX, 230, kIR, 248 };
-constexpr int kSlotY = 254, kSlotSize = 26;
-const RECT kRcBind      { kIX, 298, kIR, 334 };
-const RECT kRcStatus    { kPanelL + 4, 360, kPanelR, 384 };
+const RECT kRcBreak     { kIX, 200, kIX + 200, 218 };
+const RECT kRcInventory { kIX, 228, kIX + 200, 246 };
+const RECT kRcSlotsLbl  { kIX, 258, kIR, 276 };
+constexpr int kSlotY = 282, kSlotSize = 26;
+const RECT kRcBind      { kIX, 326, kIR, 362 };
+const RECT kRcStatus    { kPanelL + 4, 388, kPanelR, 412 };
 
 RECT SlotRect(int i) {
     const int step = (kIR - kIX - kSlotSize) / 8;
@@ -331,6 +333,21 @@ void ClickOnce(int holdMs, PreciseTimer& timer) {
     SendInput(1, &input[1], sizeof(INPUT));
 }
 
+// Modo "Break blocks": en vez de pulsar y soltar, suelta y vuelve a pulsar casi a la vez.
+// Asi el boton queda pulsado entre clics: Minecraft sigue rompiendo el bloque que miras
+// y cada nueva pulsacion cuenta como un clic para pegar.
+void SendLeft(DWORD flag) {
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = flag;
+    SendInput(1, &in, sizeof(INPUT));
+}
+void ClickBreak(PreciseTimer& timer) {
+    SendLeft(MOUSEEVENTF_LEFTUP);
+    timer.SleepUntil(Clock::now() + std::chrono::milliseconds(1));
+    SendLeft(MOUSEEVENTF_LEFTDOWN);
+}
+
 void Redraw() { if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE); }
 
 void RefreshSliders() {
@@ -422,6 +439,7 @@ void Worker() {
     PreciseTimer timer;
     bool prevDown = false;
     bool wasActive = false;
+    bool ourDown = false;   // la ultima pulsacion enviada fue nuestra (modo Break blocks)
     auto next = clock::now();
 
     // Historial de clics (fisicos + automaticos) del ultimo segundo
@@ -470,6 +488,9 @@ void Worker() {
         const bool canClick = g_enabled.load() && held && SlotAllowed() &&
                               MinecraftFocused() && !menuBlocked;
         if (!canClick) {
+            // Si soltaste el raton justo despues de nuestra pulsacion, se suelta tambien
+            // para que el boton no se quede pulsado.
+            if (ourDown && !held) { SendLeft(MOUSEEVENTF_LEFTUP); ourDown = false; }
             wasActive = false;
             timer.SleepUntil(clock::now() + std::chrono::milliseconds(2), false);
             continue;
@@ -505,7 +526,14 @@ void Worker() {
         const auto clickStart = clock::now();
         std::uniform_int_distribution<int> hold(8, 16);
         int holdMs = std::min(hold(rng), std::max(1, static_cast<int>(delay * 0.35)));
-        ClickOnce(holdMs, timer);
+        if (g_breakBlocks.load()) {
+            ClickBreak(timer);
+            ourDown = true;
+            if (!g_lmbHeld.load()) { SendLeft(MOUSEEVENTF_LEFTUP); ourDown = false; }
+        } else {
+            ClickOnce(holdMs, timer);
+            ourDown = false;
+        }
         history.push_back(clickStart);
 
         next = clickStart + interval;
@@ -578,6 +606,7 @@ void PaintMain(HWND h, HDC dc) {
     wchar_t cps[16]{}; swprintf_s(cps, L"%.1f", g_cpsX10.load() / 10.0);
     DrawLabel(dc, cps, kRcCpsLabel, g_fLabel, COL_PURPLE_LIGHT, DT_RIGHT);
 
+    DrawCheckbox(dc, g, kRcBreak, L"Break blocks", g_breakBlocks.load());
     DrawCheckbox(dc, g, kRcInventory, L"Click on inventory", false);
 
     DrawLabel(dc, L"Whitelisted hotbar slots", kRcSlotsLbl, g_fLabel, COL_TEXT);
@@ -680,7 +709,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     }
     case WM_SETCURSOR: {
         POINT pt{}; GetCursorPos(&pt); ScreenToClient(h, &pt);
-        bool hot = InRect(kRcEnabled, pt.x, pt.y) || InRect(kRcInventory, pt.x, pt.y) || InRect(kRcBind, pt.x, pt.y);
+        bool hot = InRect(kRcEnabled, pt.x, pt.y) || InRect(kRcBreak, pt.x, pt.y) || InRect(kRcInventory, pt.x, pt.y) || InRect(kRcBind, pt.x, pt.y);
         for (int i = 0; i < 9 && !hot; ++i) hot = InRect(SlotRect(i), pt.x, pt.y);
         if (hot && LOWORD(l) == HTCLIENT) { SetCursor(LoadCursorW(nullptr, IDC_HAND)); return TRUE; }
         break;
@@ -689,6 +718,9 @@ LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         const int x = GET_X_LPARAM(l), y = GET_Y_LPARAM(l);
         if (InRect(kRcEnabled, x, y)) {
             g_enabled.store(!g_enabled.load());
+            Redraw();
+        } else if (InRect(kRcBreak, x, y)) {
+            g_breakBlocks.store(!g_breakBlocks.load());
             Redraw();
         } else if (InRect(kRcInventory, x, y)) {
             // Politica del servidor: no se permite autoclick en inventarios (refill = baneable).

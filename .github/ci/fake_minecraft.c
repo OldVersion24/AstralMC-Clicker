@@ -2,12 +2,16 @@
 //  - clase de ventana "Minecraft" y es la ventana activa (_NET_ACTIVE_WINDOW)
 //  - "jugando": cursor oculto y recolocado en el centro, como hace el juego
 //  - "menu abierto": cursor normal y libre
-// Cuenta los clics que recibe en cada fase y falla si el clicker no se comporta bien.
+//  - mantiene el boton izquierdo pulsado todo el tiempo, como un jugador
+// Uso: fake_minecraft break | normal
+// Cuenta los clics que recibe y cuanto tiempo ve el boton pulsado, y falla si algo va mal.
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <X11/cursorfont.h>
+#include <X11/extensions/XTest.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <poll.h>
 
@@ -16,7 +20,8 @@ static double now(void) {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    const int breakMode = argc > 1 && strcmp(argv[1], "break") == 0;
     Display* d = XOpenDisplay(NULL);
     if (!d) { fprintf(stderr, "sin display\n"); return 2; }
     Window root = DefaultRootWindow(d);
@@ -24,24 +29,29 @@ int main(void) {
     Window w = XCreateSimpleWindow(d, root, 600, 50, W, H, 0, 0, 0x335533);
     XClassHint ch = { "minecraft", "Minecraft" };
     XSetClassHint(d, w, &ch);
-    XSelectInput(d, w, ButtonPressMask);
+    XSelectInput(d, w, ButtonPressMask | ButtonReleaseMask);
     XMapRaised(d, w);
     XChangeProperty(d, root, XInternAtom(d, "_NET_ACTIVE_WINDOW", False), XA_WINDOW, 32,
                     PropModeReplace, (unsigned char*)&w, 1);
 
-    // Cursor invisible (como Minecraft jugando) y cursor normal (menu abierto)
     char zero = 0;
     Pixmap pm = XCreateBitmapFromData(d, w, &zero, 1, 1);
     XColor black = { 0 };
     Cursor blank = XCreatePixmapCursor(d, pm, pm, &black, &black, 0, 0);
     Cursor arrow = XCreateFontCursor(d, XC_left_ptr);
-    XFlush(d);
+    XWarpPointer(d, None, w, 0, 0, 0, 0, W / 2, H / 2);
+    XSync(d, False);
+
+    // El "jugador" pulsa y mantiene el boton izquierdo (otro dispositivo, como un raton real).
+    XTestFakeButtonEvent(d, 1, True, CurrentTime);
+    XSync(d, False);
 
     // Fases: 0-1 s calentar, 1-5 s jugando, 5-7 s menu abierto, 7-9 s jugando otra vez
     const double t0 = now();
     int phaseClicks[4] = { 0 }, maxPerSecond = 0;
     double times[4096]; int n = 0;
     int lastPhase = -1;
+    int isDown = 0; double downSince = 0, downTime1 = 0;   // tiempo con el boton pulsado en la fase 1
     struct pollfd pfd = { ConnectionNumber(d), POLLIN, 0 };
 
     for (;;) {
@@ -51,7 +61,9 @@ int main(void) {
         const int inGame = phase != 2;
         if (phase != lastPhase) {
             XDefineCursor(d, w, inGame ? blank : arrow);
-            if (!inGame) XWarpPointer(d, None, w, 0, 0, 0, 0, 40, 40);   // cursor libre, fuera del centro
+            if (!inGame) XWarpPointer(d, None, w, 0, 0, 0, 0, 40, 40);
+            if (phase == 1 && isDown) downSince = t;
+            if (lastPhase == 1 && isDown) downTime1 += t - (downSince > 1.0 ? downSince : 1.0);
             lastPhase = phase;
             printf("t=%.1fs fase %d (%s)\n", t, phase, inGame ? "jugando" : "menu abierto");
         }
@@ -60,27 +72,36 @@ int main(void) {
 
         while (XPending(d)) {
             XEvent e; XNextEvent(d, &e);
-            if (e.type == ButtonPress && e.xbutton.button == Button1) {
-                const double tc = now() - t0;
-                const int p = tc < 1 ? 0 : tc < 5 ? 1 : tc < 7 ? 2 : 3;
+            if (e.xbutton.button != Button1) continue;
+            const double tc = now() - t0;
+            const int p = tc < 1 ? 0 : tc < 5 ? 1 : tc < 7 ? 2 : 3;
+            if (e.type == ButtonPress) {
                 phaseClicks[p]++;
                 if (n < 4096) times[n++] = tc;
+                if (!isDown) { isDown = 1; downSince = tc; }
+            } else if (e.type == ButtonRelease) {
+                if (isDown && p == 1) downTime1 += tc - (downSince > 1.0 ? downSince : 1.0);
+                isDown = 0;
             }
         }
         poll(&pfd, 1, 2);
     }
+    XTestFakeButtonEvent(d, 1, False, CurrentTime);
+    XSync(d, False);
 
-    // Maximo de clics en cualquier ventana de 1 segundo
     for (int i = 0; i < n; ++i) {
+        if (times[i] < 0.5) continue;   // la pulsacion inicial del "jugador" no cuenta
         int c = 0;
         for (int j = i; j < n && times[j] - times[i] < 1.0; ++j) c++;
         if (c > maxPerSecond) maxPerSecond = c;
     }
-    // Los clics de la fase 2 en los primeros 100 ms son el margen de deteccion del menu.
     int menuLate = 0;
     for (int i = 0; i < n; ++i) if (times[i] >= 5.1 && times[i] < 7.0) menuLate++;
+    const double downPct = 100.0 * downTime1 / 4.0;
 
+    printf("modo: %s\n", breakMode ? "Break blocks" : "normal");
     printf("clics jugando (1-5 s): %d  -> %.1f CPS\n", phaseClicks[1], phaseClicks[1] / 4.0);
+    printf("boton pulsado jugando: %.0f%% del tiempo\n", downPct);
     printf("clics con menu abierto (5.1-7 s): %d\n", menuLate);
     printf("clics jugando otra vez (7-9 s): %d\n", phaseClicks[3]);
     printf("maximo en cualquier segundo: %d\n", maxPerSecond);
@@ -90,6 +111,8 @@ int main(void) {
     if (maxPerSecond > 16)       { printf("FALLO: mas de 16 clics en un segundo\n"); ok = 0; }
     if (menuLate > 0)            { printf("FALLO: clica con el menu abierto\n"); ok = 0; }
     if (phaseClicks[3] < 2 * 12) { printf("FALLO: no vuelve a clicar al cerrar el menu\n"); ok = 0; }
+    if (breakMode && downPct < 90)  { printf("FALLO: Break blocks no mantiene el boton pulsado\n"); ok = 0; }
+    if (!breakMode && downPct > 50) { printf("FALLO: modo normal deja el boton pulsado\n"); ok = 0; }
     printf(ok ? "PRUEBA OK\n" : "PRUEBA FALLIDA\n");
     return ok ? 0 : 1;
 }

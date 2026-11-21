@@ -30,13 +30,13 @@ jobs:
       - name: Compilar
         run: |
           g++ -std=c++17 -O2 -s -Wall linux/astral_clicker.cpp -o AstralClicker-linux \
-            $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
+            $(pkg-config --cflags --libs x11 xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
           ldd AstralClicker-linux
 
       - name: Probar en pantalla virtual
         run: |
           apt-get install -y --no-install-recommends xvfb xdotool imagemagick fonts-dejavu-core
-          Xvfb :99 -screen 0 520x420x24 &
+          Xvfb :99 -screen 0 520x460x24 &
           sleep 2
           export DISPLAY=:99
           ./AstralClicker-linux &
@@ -44,13 +44,14 @@ jobs:
           sleep 3
           kill -0 $APP
           import -window root screenshot-1-inicio.png
-          # Clic en "Enabled" y en el slot 5
+          # Clic en "Enabled", en "Break blocks" (lo apaga) y en el slot 5
           xdotool mousemove 40 120 click 1
-          xdotool mousemove 236 266 click 1
+          xdotool mousemove 40 208 click 1
+          xdotool mousemove 236 294 click 1
           sleep 1
           import -window root screenshot-2-enabled.png
           # Clic en "Click on inventory": debe salir el aviso
-          xdotool mousemove 40 208 click 1
+          xdotool mousemove 40 236 click 1
           sleep 1
           import -window root screenshot-3-aviso.png
           kill -0 $APP
@@ -59,17 +60,20 @@ jobs:
       - name: Probar que clica (Minecraft falso)
         run: |
           # Version de prueba: simula el clic izquierdo mantenido (-DASTRAL_TEST). No se publica.
-          g++ -std=c++17 -O2 -DASTRAL_TEST linux/astral_clicker.cpp -o clicker-test \
-            $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread
-          gcc -O2 .github/ci/fake_minecraft.c -o fake_minecraft -lX11
+          g++ -std=c++17 -O2 -DASTRAL_TEST linux/astral_clicker.cpp -o clicker-test             $(pkg-config --cflags --libs x11 xi xfixes cairo) -pthread
+          gcc -O2 .github/ci/fake_minecraft.c -o fake_minecraft -lX11 -lXtst
           Xvfb :98 -screen 0 1280x720x24 &
           sleep 2
           export DISPLAY=:98
-          ./clicker-test &
-          CLK=$!
-          sleep 2
-          ./fake_minecraft
-          kill $CLK
+          for MODE in break normal; do
+            echo "=== Modo $MODE ==="
+            if [ "$MODE" = normal ]; then ASTRAL_TEST_BREAK=0 ./clicker-test & else ./clicker-test & fi
+            CLK=$!
+            sleep 2
+            ./fake_minecraft $MODE
+            kill $CLK
+            sleep 1
+          done
 
       - uses: actions/upload-artifact@v4
         with:

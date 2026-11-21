@@ -17,6 +17,7 @@ Es un autoclicker **limitado**, hecho para cumplir las reglas del servidor. No t
 - **Aleatoriedad fija** de ±0.5 CPS por clic.
 - **Solo funciona con Minecraft enfocado** (ventana del juego o proceso Java).
 - **No clica en menús**: inventario, cofres, aldeanos, chat… se bloquea automáticamente.
+- **Break blocks** (activado por defecto): puedes romper bloques manteniendo el clic sin apagar el clicker. Sigue pegando a los mismos CPS.
 - **Click on inventory no está permitido**: en AstralMC el autoclick en inventarios (refill de pociones) es baneable. Solo PvP.
 - **Whitelisted hotbar slots**: eliges en qué slots de la hotbar (1–9) funciona. El slot se sigue con las teclas 1–9 y la rueda del ratón.
 - **Enabled** + **Bind**: se activa con la casilla o con una **tecla que tú eliges**.
@@ -51,7 +52,7 @@ Lo que **no** tiene: reach, aim, macros, inyección en el juego, conexión a int
 
 Los programas de la Release los compila **GitHub Actions** directamente desde este repositorio (ver [`.github/workflows/build.yml`](.github/workflows/build.yml)). El archivo `SHA256SUMS.txt` de cada Release tiene los SHA-256.
 
-La compilación de Linux también se prueba sola: abre la ventana en una pantalla virtual y comprueba, contra una ventana que imita a Minecraft, que clica, que nunca pasa de 16 CPS y que se para con un menú abierto.
+La compilación de Linux también se prueba sola: abre la ventana en una pantalla virtual y comprueba, contra una ventana que imita a Minecraft, que clica con el botón mantenido, que nunca pasa de 16 CPS, que se para con un menú abierto y que "Break blocks" deja el botón pulsado para romper bloques.
 
 | Carpeta | Contenido |
 |---|---|
@@ -64,8 +65,8 @@ Compilarlo tú mismo:
 # Windows (MinGW-w64 / MSYS2 UCRT64)
 g++ -std=c++17 -O2 -s -municode -mwindows -static -static-libgcc -static-libstdc++ windows/AstralMC_Clicker.cpp -o AstralClicker.exe -lcomctl32 -lwinmm -luxtheme -lgdiplus -luser32 -lgdi32
 
-# Linux (Debian/Ubuntu: sudo apt install g++ pkg-config libx11-dev libxtst-dev libxi-dev libxfixes-dev libcairo2-dev)
-g++ -std=c++17 -O2 -s linux/astral_clicker.cpp -o AstralClicker-linux $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
+# Linux (Debian/Ubuntu: sudo apt install g++ pkg-config libx11-dev libxi-dev libxfixes-dev libcairo2-dev)
+g++ -std=c++17 -O2 -s linux/astral_clicker.cpp -o AstralClicker-linux $(pkg-config --cflags --libs x11 xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
 ```
 
 ## Créditos

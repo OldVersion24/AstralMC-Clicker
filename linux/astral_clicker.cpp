@@ -6,9 +6,9 @@
 //   - solo en los slots de la hotbar marcados
 //   - "Click on inventory" no esta permitido en AstralMC
 //
-// Dependencias (vienen con cualquier escritorio Linux): libX11, libXtst, libXi, libXfixes, libcairo.
-// Compilar (Debian/Ubuntu: sudo apt install g++ pkg-config libx11-dev libxtst-dev libxi-dev libxfixes-dev libcairo2-dev):
-//   g++ -std=c++17 -O2 -s astral_clicker.cpp -o AstralClicker-linux $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
+// Dependencias (vienen con cualquier escritorio Linux): libX11, libXi, libXfixes, libcairo.
+// Compilar (Debian/Ubuntu: sudo apt install g++ pkg-config libx11-dev libxi-dev libxfixes-dev libcairo2-dev):
+//   g++ -std=c++17 -O2 -s astral_clicker.cpp -o AstralClicker-linux $(pkg-config --cflags --libs x11 xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
 //
 // Wayland: funciona con Minecraft normal (corre por XWayland). No funciona si Minecraft
 // se fuerza a Wayland nativo, porque Wayland no deja a otros programas clicar en el.
@@ -19,7 +19,6 @@
 #include <X11/XKBlib.h>
 #include <X11/keysym.h>
 #include <X11/cursorfont.h>
-#include <X11/extensions/XTest.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/Xfixes.h>
 #include <cairo/cairo.h>
@@ -57,6 +56,7 @@ std::atomic<int>  g_cpsX10{ 155 };          // 1.0 - 16.0 CPS (defecto 15.5)
 std::atomic<int>  g_keycode{ 0 };           // tecla de activacion (keycode X11), 0 = ninguna
 std::atomic<int>  g_slot{ 0 };              // slot actual de la hotbar (0-8)
 std::atomic<int>  g_slotMask{ 0x1FF };      // slots permitidos (bit i = slot i+1)
+std::atomic<bool> g_breakBlocks{ true };    // "Break blocks": se puede romper bloques sin apagar el clicker
 std::atomic<int>  g_wheelAccum{ 0 };        // giro de rueda pendiente (+120 arriba, -120 abajo)
 std::atomic<int>  g_pendingDigit{ 0 };      // tecla 1-9 pulsada pendiente (0 = ninguna)
 std::atomic<bool> g_dirty{ true };          // hay que redibujar la ventana
@@ -82,20 +82,21 @@ constexpr Rgb COL_WHITE = rgb(255, 255, 255);
 
 // ---- Layout (igual que en Windows) ----
 struct Rect { int l, t, r, b; bool has(int x, int y) const { return x >= l && x < r && y >= t && y < b; } };
-constexpr int kClientW = 480, kClientH = 392;
-constexpr int kPanelL = 16, kPanelT = 74, kPanelR = kClientW - 16, kPanelB = 352;
+constexpr int kClientW = 480, kClientH = 420;
+constexpr int kPanelL = 16, kPanelT = 74, kPanelR = kClientW - 16, kPanelB = 380;
 constexpr int kIX = 32, kIR = kClientW - 32;
 constexpr Rect kRcEnabled   { kIX, 112, kIX + 160, 130 };
 constexpr Rect kRcCpsLabel  { kIX, 140, kIR, 158 };
 constexpr Rect kRcSlider    { kIX - 7, 158, kIR + 7, 190 };
-constexpr Rect kRcInventory { kIX, 200, kIX + 200, 218 };
-constexpr Rect kRcSlotsLbl  { kIX, 230, kIR, 248 };
-constexpr int kSlotY = 254, kSlotSize = 26;
-constexpr Rect kRcBind      { kIX, 298, kIR, 334 };
-constexpr Rect kRcStatus    { kPanelL + 4, 360, kPanelR, 384 };
+constexpr Rect kRcBreak     { kIX, 200, kIX + 200, 218 };
+constexpr Rect kRcInventory { kIX, 228, kIX + 200, 246 };
+constexpr Rect kRcSlotsLbl  { kIX, 258, kIR, 276 };
+constexpr int kSlotY = 282, kSlotSize = 26;
+constexpr Rect kRcBind      { kIX, 326, kIR, 362 };
+constexpr Rect kRcStatus    { kPanelL + 4, 388, kPanelR, 412 };
 // Aviso de inventario (dentro de la ventana)
-constexpr Rect kRcDialog    { 40, 120, kClientW - 40, 280 };
-constexpr Rect kRcDialogOk  { kClientW / 2 - 50, 232, kClientW / 2 + 50, 264 };
+constexpr Rect kRcDialog    { 40, 134, kClientW - 40, 294 };
+constexpr Rect kRcDialogOk  { kClientW / 2 - 50, 246, kClientW / 2 + 50, 278 };
 
 Rect SlotRect(int i) {
     const int step = (kIR - kIX - kSlotSize) / 8;
@@ -178,6 +179,7 @@ std::atomic<long long> g_lastInGameMs{ 0 };
 std::atomic<bool> g_cursorVisible{ false };
 std::atomic<bool> g_cursorSignalValid{ false };
 std::atomic<bool> g_mcFocused{ false };
+std::atomic<unsigned long> g_mcWindow{ 0 };   // ventana de Minecraft enfocada
 
 bool GuiOpen() {
     if (g_cursorSignalValid.load() && g_cursorVisible.load()) return true;   // instantaneo
@@ -224,6 +226,7 @@ void GuiMonitor() {
             const Window w = ActiveWindow(d);
             focused = IsMinecraftWindow(d, w);
             mc = focused ? w : 0;
+            g_mcWindow.store(mc);
             g_mcFocused.store(focused);
             nextFocusCheck = now + std::chrono::milliseconds(40);
         }
@@ -341,12 +344,49 @@ void InputThread() {
 }
 
 // ---- Clicador ----
+// Los clics se envian directamente a la ventana de Minecraft (XSendEvent).
+// No se usa XTEST: en X11, si mantienes el boton real pulsado, el servidor ignora
+// las pulsaciones de XTEST del mismo boton y Minecraft no recibiria ningun clic.
+void SendLeft(Display* d, bool down) {
+    const Window w = static_cast<Window>(g_mcWindow.load());
+    if (!w) return;
+    XWindowAttributes wa{};
+    if (!XGetWindowAttributes(d, w, &wa)) return;
+    const int cx = wa.width / 2, cy = wa.height / 2;
+    int rx = cx, ry = cy;
+    Window child = 0;
+    XTranslateCoordinates(d, w, wa.root, cx, cy, &rx, &ry, &child);
+    XEvent e{};
+    e.xbutton.type = down ? ButtonPress : ButtonRelease;
+    e.xbutton.display = d;
+    e.xbutton.window = w;
+    e.xbutton.root = wa.root;
+    e.xbutton.subwindow = None;
+    e.xbutton.time = CurrentTime;
+    e.xbutton.x = cx;
+    e.xbutton.y = cy;
+    e.xbutton.x_root = rx;
+    e.xbutton.y_root = ry;
+    e.xbutton.state = down ? 0 : Button1Mask;
+    e.xbutton.button = Button1;
+    e.xbutton.same_screen = True;
+    XSendEvent(d, w, True, down ? ButtonPressMask : ButtonReleaseMask, &e);
+    XFlush(d);
+}
+
 void ClickOnce(Display* d, int holdMs) {
-    XTestFakeButtonEvent(d, 1, True, CurrentTime);
-    XFlush(d);
+    SendLeft(d, true);
     SleepUntil(Clock::now() + std::chrono::milliseconds(holdMs));
-    XTestFakeButtonEvent(d, 1, False, CurrentTime);
-    XFlush(d);
+    SendLeft(d, false);
+}
+
+// Modo "Break blocks": en vez de pulsar y soltar, suelta y vuelve a pulsar casi a la vez.
+// Asi el boton queda pulsado entre clics: Minecraft sigue rompiendo el bloque que miras
+// y cada nueva pulsacion cuenta como un clic para pegar.
+void ClickBreak(Display* d) {
+    SendLeft(d, false);
+    SleepUntil(Clock::now() + std::chrono::milliseconds(1));
+    SendLeft(d, true);
 }
 
 void Worker() {
@@ -354,6 +394,7 @@ void Worker() {
     if (!d) return;
     std::mt19937 rng{ std::random_device{}() };
     bool wasActive = false;
+    bool ourDown = false;   // la ultima pulsacion enviada fue nuestra (modo Break blocks)
     auto next = Clock::now();
     std::deque<Clock::time_point> history;   // clics (fisicos + automaticos) del ultimo segundo
     auto trim = [&](Clock::time_point t) {
@@ -371,6 +412,9 @@ void Worker() {
         const bool menuBlocked = g_pressInMenu.load() || GuiOpen();
         const bool canClick = g_enabled.load() && held && SlotAllowed() && g_mcFocused.load() && !menuBlocked;
         if (!canClick) {
+            // Si soltaste el raton justo despues de nuestra pulsacion, se suelta tambien
+            // para que el boton no se quede pulsado.
+            if (ourDown && !held) { SendLeft(d, false); ourDown = false; }
             wasActive = false;
             SleepUntil(Clock::now() + std::chrono::milliseconds(2));
             continue;
@@ -397,7 +441,14 @@ void Worker() {
         const auto clickStart = Clock::now();
         std::uniform_int_distribution<int> hold(8, 16);
         const int holdMs = std::min(hold(rng), std::max(1, static_cast<int>(delay * 0.35)));
-        ClickOnce(d, holdMs);
+        if (g_breakBlocks.load()) {
+            ClickBreak(d);
+            ourDown = true;
+            if (!LmbHeld()) { SendLeft(d, false); ourDown = false; }
+        } else {
+            ClickOnce(d, holdMs);
+            ourDown = false;
+        }
         history.push_back(clickStart);
 
         next = clickStart + interval;
@@ -519,6 +570,7 @@ void Paint(Display* d, cairo_t* cr) {
         SetColor(cr, COL_PURPLE); cairo_arc(cr, thumbX, cy, 4, 0, 2 * M_PI); cairo_fill(cr);
     }
 
+    Checkbox(cr, kRcBreak, "Break blocks", g_breakBlocks.load());
     Checkbox(cr, kRcInventory, "Click on inventory", false);
 
     // Slots de la hotbar
@@ -598,7 +650,7 @@ void SetSliderFromX(int x) {
 
 bool IsHot(int x, int y) {
     if (g_showWarning) return kRcDialogOk.has(x, y);
-    if (kRcEnabled.has(x, y) || kRcInventory.has(x, y) || kRcBind.has(x, y) || kRcSlider.has(x, y)) return true;
+    if (kRcEnabled.has(x, y) || kRcBreak.has(x, y) || kRcInventory.has(x, y) || kRcBind.has(x, y) || kRcSlider.has(x, y)) return true;
     for (int i = 0; i < 9; ++i) if (SlotRect(i).has(x, y)) return true;
     return false;
 }
@@ -606,6 +658,7 @@ bool IsHot(int x, int y) {
 void OnClick(int x, int y) {
     if (g_showWarning) { if (kRcDialogOk.has(x, y)) g_showWarning = false; g_dirty.store(true); return; }
     if (kRcEnabled.has(x, y)) { g_enabled.store(!g_enabled.load()); }
+    else if (kRcBreak.has(x, y)) { g_breakBlocks.store(!g_breakBlocks.load()); }
     else if (kRcInventory.has(x, y)) { g_showWarning = true; }   // no permitido: refill = baneable
     else if (kRcBind.has(x, y)) { g_binding.store(true); }
     else if (kRcSlider.has(x, y)) { g_dragging = true; SetSliderFromX(x); }
@@ -627,8 +680,6 @@ int main() {
     int op, ev, er, xiMajor = 2, xiMinor = 2;
     if (!XQueryExtension(d, "XInputExtension", &op, &ev, &er) || XIQueryVersion(d, &xiMajor, &xiMinor) != Success)
         g_fatal = "Error: falta XInput2 en este sistema.";
-    else if (!XQueryExtension(d, "XTEST", &op, &ev, &er))
-        g_fatal = "Error: falta la extension XTEST en este sistema.";
     else if (!XQueryExtension(d, "XFIXES", &op, &ev, &er))
         g_fatal = "Error: falta la extension XFIXES en este sistema.";
 
@@ -660,7 +711,11 @@ int main() {
     cairo_surface_t* winSurf = cairo_xlib_surface_create(d, win, DefaultVisual(d, screen), kClientW, kClientH);
     cairo_surface_t* back = cairo_image_surface_create(CAIRO_FORMAT_RGB24, kClientW, kClientH);   // doble buffer
 
-    if (kTestHold) g_enabled.store(true);
+    if (kTestHold) {
+        g_enabled.store(true);
+        const char* b = std::getenv("ASTRAL_TEST_BREAK");
+        if (b && b[0] == '0') g_breakBlocks.store(false);
+    }
     std::thread monitor, input, worker;
     if (g_fatal.empty()) {
         monitor = std::thread(GuiMonitor);
