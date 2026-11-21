@@ -8,8 +8,7 @@
 //
 // Dependencias (vienen con cualquier escritorio Linux): libX11, libXtst, libXi, libXfixes, libcairo.
 // Compilar (Debian/Ubuntu: sudo apt install g++ pkg-config libx11-dev libxtst-dev libxi-dev libxfixes-dev libcairo2-dev):
-//   g++ -std=c++17 -O2 -s astral_clicker.cpp -o AstralClicker-linux \
-//       $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
+//   g++ -std=c++17 -O2 -s astral_clicker.cpp -o AstralClicker-linux $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread -static-libstdc++ -static-libgcc
 //
 // Wayland: funciona con Minecraft normal (corre por XWayland). No funciona si Minecraft
 // se fuerza a Wayland nativo, porque Wayland no deja a otros programas clicar en el.
@@ -187,6 +186,15 @@ bool GuiOpen() {
 
 bool SlotAllowed() { return (g_slotMask.load() >> g_slot.load()) & 1; }
 
+// Solo para la prueba automatica de GitHub Actions (se compila aparte con -DASTRAL_TEST):
+// simula el clic izquierdo mantenido. El programa publicado no lleva esto.
+#ifdef ASTRAL_TEST
+constexpr bool kTestHold = true;
+#else
+constexpr bool kTestHold = false;
+#endif
+bool LmbHeld() { return kTestHold || g_lmbHeld.load(); }
+
 bool CursorImageVisible(Display* d) {
     XFixesCursorImage* img = XFixesGetCursorImage(d);
     if (!img) return true;
@@ -353,7 +361,7 @@ void Worker() {
     };
 
     while (g_running.load()) {
-        const bool held = g_lmbHeld.load();
+        const bool held = LmbHeld();
         if (g_pressEval.exchange(false)) {
             g_pressInMenu.store(GuiOpen());
             history.push_back(Clock::now());   // el clic fisico tambien cuenta para el limite
@@ -377,14 +385,14 @@ void Worker() {
 
         if (Clock::now() < next) {
             SleepUntil(next);
-            if (!g_lmbHeld.load() || !g_enabled.load() || GuiOpen() || !SlotAllowed()) continue;
+            if (!LmbHeld() || !g_enabled.load() || GuiOpen() || !SlotAllowed()) continue;
         }
         if (history.size() >= kMaxClicksPerSecond) {   // limite duro: 16 clics por segundo
             next = history.front() + std::chrono::milliseconds(1000);
             SleepUntil(next);
             continue;
         }
-        if (!g_lmbHeld.load() || !g_enabled.load() || GuiOpen() || !SlotAllowed()) continue;
+        if (!LmbHeld() || !g_enabled.load() || GuiOpen() || !SlotAllowed()) continue;
 
         const auto clickStart = Clock::now();
         std::uniform_int_distribution<int> hold(8, 16);
@@ -652,6 +660,7 @@ int main() {
     cairo_surface_t* winSurf = cairo_xlib_surface_create(d, win, DefaultVisual(d, screen), kClientW, kClientH);
     cairo_surface_t* back = cairo_image_surface_create(CAIRO_FORMAT_RGB24, kClientW, kClientH);   // doble buffer
 
+    if (kTestHold) g_enabled.store(true);
     std::thread monitor, input, worker;
     if (g_fatal.empty()) {
         monitor = std::thread(GuiMonitor);

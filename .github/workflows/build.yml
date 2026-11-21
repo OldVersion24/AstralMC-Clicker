@@ -56,6 +56,21 @@ jobs:
           kill -0 $APP
           kill $APP
 
+      - name: Probar que clica (Minecraft falso)
+        run: |
+          # Version de prueba: simula el clic izquierdo mantenido (-DASTRAL_TEST). No se publica.
+          g++ -std=c++17 -O2 -DASTRAL_TEST linux/astral_clicker.cpp -o clicker-test \
+            $(pkg-config --cflags --libs x11 xtst xi xfixes cairo) -pthread
+          gcc -O2 .github/ci/fake_minecraft.c -o fake_minecraft -lX11
+          Xvfb :98 -screen 0 1280x720x24 &
+          sleep 2
+          export DISPLAY=:98
+          ./clicker-test &
+          CLK=$!
+          sleep 2
+          ./fake_minecraft
+          kill $CLK
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux
